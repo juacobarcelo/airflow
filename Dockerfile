@@ -130,28 +130,28 @@ RUN curl --fail --location https://deb.nodesource.com/setup_10.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MySQL client from Oracle repositories (Debian installs mariadb)
-RUN KEY="A4A9406876FCBD3C456770C88C718D3B5072E1F5" \
-    && GNUPGHOME="$(mktemp -d)" \
-    && export GNUPGHOME \
-    && for KEYSERVER in $(shuf -e \
-            ha.pool.sks-keyservers.net \
-            hkp://p80.pool.sks-keyservers.net:80 \
-            keyserver.ubuntu.com \
-            hkp://keyserver.ubuntu.com:80 \
-            pgp.mit.edu) ; do \
-          gpg --keyserver "${KEYSERVER}" --recv-keys "${KEY}" && break || true ; \
-       done \
-    && gpg --export "${KEY}" | apt-key add - \
-    && gpgconf --kill all \
-    rm -rf "${GNUPGHOME}"; \
-    apt-key list > /dev/null \
-    && echo "deb http://repo.mysql.com/apt/debian/ stretch mysql-5.7" | tee -a /etc/apt/sources.list.d/mysql.list \
-    && apt-get update \
-    && apt-get install --no-install-recommends -y \
-        libmysqlclient-dev \
-        mysql-client \
-    && apt-get autoremove -yqq --purge \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+#RUN KEY="A4A9406876FCBD3C456770C88C718D3B5072E1F5" \
+#    && GNUPGHOME="$(mktemp -d)" \
+#    && export GNUPGHOME \
+#    && for KEYSERVER in $(shuf -e \
+#            ha.pool.sks-keyservers.net \
+#            hkp://p80.pool.sks-keyservers.net:80 \
+#            keyserver.ubuntu.com \
+#            hkp://keyserver.ubuntu.com:80 \
+#            pgp.mit.edu) ; do \
+#          gpg --keyserver "${KEYSERVER}" --recv-keys "${KEY}" && break || true ; \
+#       done \
+#    && gpg --export "${KEY}" | apt-key add - \
+#    && gpgconf --kill all \
+#    rm -rf "${GNUPGHOME}"; \
+#    apt-key list > /dev/null \
+#    && echo "deb http://repo.mysql.com/apt/debian/ stretch mysql-5.7" | tee -a /etc/apt/sources.list.d/mysql.list \
+#    && apt-get update \
+#    && apt-get install --no-install-recommends -y \
+#        libmysqlclient-dev \
+#        mysql-client \
+#    && apt-get autoremove -yqq --purge \
+#    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ARG PIP_VERSION
 ENV PIP_VERSION=${PIP_VERSION}
@@ -231,6 +231,19 @@ RUN AIRFLOW_SITE_PACKAGE="/root/.local/lib/python${PYTHON_MAJOR_MINOR_VERSION}/s
 RUN find /root/.local -executable -print0 | xargs --null chmod g+x && \
     find /root/.local -print0 | xargs --null chmod g+rw
 
+
+# Install astronomer-airflow-scripts
+RUN apt-get update && apt-get install -y git build-essential \
+    && mkdir -p /astronomer && cd /astronomer \
+    && git clone --depth=1 https://github.com/astronomer/astronomer-airflow-scripts.git \
+    && pip install -U wheel && cd /astronomer/astronomer-airflow-scripts && pip install . \
+    && apt-get --purge remove -y build-essential && apt-get autoremove -yqq --purge \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+#RUN apt-get update && apt-get install -y git build-essential \
+#    && mkdir /astronomer && cd /astronomer  \
+#    && git clone --depth=1 https://github.com/astronomer/astronomer-airflow-scripts.git
+
 ##############################################################################################
 # This is the actual Airflow image - much smaller than the build one. We copy
 # installed Airflow and all it's dependencies from the build image to make it smaller.
@@ -299,35 +312,36 @@ RUN mkdir -pv /usr/share/man/man1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MySQL client from Oracle repositories (Debian installs mariadb)
-RUN KEY="A4A9406876FCBD3C456770C88C718D3B5072E1F5" \
-    && GNUPGHOME="$(mktemp -d)" \
-    && export GNUPGHOME \
-    && for KEYSERVER in $(shuf -e \
-            ha.pool.sks-keyservers.net \
-            hkp://p80.pool.sks-keyservers.net:80 \
-            keyserver.ubuntu.com \
-            hkp://keyserver.ubuntu.com:80 \
-            pgp.mit.edu) ; do \
-          gpg --keyserver "${KEYSERVER}" --recv-keys "${KEY}" && break || true ; \
-       done \
-    && gpg --export "${KEY}" | apt-key add - \
-    && gpgconf --kill all \
-    rm -rf "${GNUPGHOME}"; \
-    apt-key list > /dev/null \
-    && echo "deb http://repo.mysql.com/apt/debian/ stretch mysql-5.7" | tee -a /etc/apt/sources.list.d/mysql.list \
-    && apt-get update \
-    && apt-get install --no-install-recommends -y \
-        libmysqlclient20 \
-        mysql-client \
-    && apt-get autoremove -yqq --purge \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+#RUN KEY="A4A9406876FCBD3C456770C88C718D3B5072E1F5" \
+#    && GNUPGHOME="$(mktemp -d)" \
+#    && export GNUPGHOME \
+#    && for KEYSERVER in $(shuf -e \
+#            ha.pool.sks-keyservers.net \
+#            hkp://p80.pool.sks-keyservers.net:80 \
+#            keyserver.ubuntu.com \
+#            hkp://keyserver.ubuntu.com:80 \
+#            pgp.mit.edu) ; do \
+#          gpg --keyserver "${KEYSERVER}" --recv-keys "${KEY}" && break || true ; \
+#       done \
+#    && gpg --export "${KEY}" | apt-key add - \
+#    && gpgconf --kill all \
+#    rm -rf "${GNUPGHOME}"; \
+#    apt-key list > /dev/null \
+#    && echo "deb http://repo.mysql.com/apt/debian/ stretch mysql-5.7" | tee -a /etc/apt/sources.list.d/mysql.list \
+#    && apt-get update \
+#    && apt-get install --no-install-recommends -y \
+#        libmysqlclient20 \
+#        mysql-client \
+#    && apt-get autoremove -yqq --purge \
+#    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install gcloud
+
 RUN apt-get install curl
 RUN apt-get install -y curl apt-transport-https ca-certificates gnupg && \
  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
  curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
  apt-get update && apt-get -y install google-cloud-sdk
+
 
 ARG PIP_VERSION
 ENV PIP_VERSION=${PIP_VERSION}
@@ -365,6 +379,8 @@ COPY scripts/prod/clean-logs.sh /clean-logs
 
 RUN chmod a+x /entrypoint /clean-logs
 
+
+
 # Make /etc/passwd root-group-writeable so that user can be dynamically added by OpenShift
 # See https://github.com/apache/airflow/issues/9248
 RUN chmod g=u /etc/passwd
@@ -377,6 +393,12 @@ WORKDIR ${AIRFLOW_HOME}
 EXPOSE 8080
 
 USER ${AIRFLOW_UID}
+
+COPY --from=airflow-build-image /astronomer/ /astronomer/
+
+RUN cd /astronomer/astronomer-airflow-scripts \
+    && pip install --user .
+
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint"]
 CMD ["airflow", "--help"]
