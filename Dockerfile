@@ -42,7 +42,7 @@ ARG AIRFLOW_HOME=/opt/airflow
 ARG AIRFLOW_UID="50000"
 ARG AIRFLOW_GID="50000"
 
-ARG PIP_VERSION="19.0.2"
+ARG PIP_VERSION="20.2.2"
 ARG CASS_DRIVER_BUILD_CONCURRENCY="8"
 
 ARG PYTHON_BASE_IMAGE="python:3.6-slim-buster"
@@ -347,6 +347,9 @@ ARG PIP_VERSION
 ENV PIP_VERSION=${PIP_VERSION}
 RUN pip install --upgrade pip==${PIP_VERSION}
 
+
+RUN pip install Authlib
+
 ENV AIRFLOW_UID=${AIRFLOW_UID}
 ENV AIRFLOW_GID=${AIRFLOW_GID}
 
@@ -399,6 +402,7 @@ COPY --from=airflow-build-image /astronomer/ /astronomer/
 RUN cd /astronomer/astronomer-airflow-scripts \
     && pip install --user .
 
+RUN pip uninstall -y oauthlib requests-oauthlib && pip install --user requests-oauthlib==1.1.0 oauthlib==2.1.0
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint"]
 CMD ["airflow", "--help"]
