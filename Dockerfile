@@ -402,7 +402,7 @@ COPY --from=airflow-build-image /astronomer/ /astronomer/
 RUN cd /astronomer/astronomer-airflow-scripts \
     && pip install --user .
 
-RUN pip uninstall -y oauthlib requests-oauthlib && pip install --user requests-oauthlib==1.1.0 oauthlib==2.1.0
+RUN pip uninstall -y oauthlib requests-oauthlib && pip install --user requests-oauthlib==1.1.0 oauthlib==2.1.0 flask_oauthlib
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint"]
 CMD ["airflow", "--help"]
