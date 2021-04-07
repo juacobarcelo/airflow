@@ -45,7 +45,7 @@ from airflow.exceptions import AirflowException, TaskNotFound
 from airflow.jobs.base_job import BaseJob
 from airflow.models import DagRun, SlaMiss, errors
 from airflow.settings import Stats
-from airflow.ti_deps.dep_context import DepContext, SCHEDULEABLE_STATES, SCHEDULED_DEPS
+from airflow.ti_deps.dep_context import DepContext, SCHEDULED_DEPS
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.ti_deps.deps.pool_slots_available_dep import STATES_TO_COUNT_AS_RUNNING
 from airflow.utils import asciiart, helpers, timezone
@@ -222,7 +222,12 @@ class DagFileProcessor(AbstractDagFileProcessor, LoggingMixin, MultiprocessingSt
 
         self._process.terminate()
         # Arbitrarily wait 5s for the process to die
-        self._process.join(5)
+        if six.PY2:
+            self._process.join(5)
+        else:
+            from contextlib import suppress
+            with suppress(TimeoutError):
+                self._process._popen.wait(5)  # pylint: disable=protected-access
         if sigkill:
             self._kill_process()
         self._parent_channel.close()
@@ -386,7 +391,7 @@ class SchedulerJob(BaseJob):
         self.do_pickle = do_pickle
         super(SchedulerJob, self).__init__(*args, **kwargs)
 
-        self.max_threads = conf.getint('scheduler', 'max_threads')
+        self.max_threads = conf.getint('scheduler', 'parsing_processes')
 
         if log:
             self._log = log
@@ -785,27 +790,11 @@ class SchedulerJob(BaseJob):
             run.dag = dag
             # todo: preferably the integrity check happens at dag collection time
             run.verify_integrity(session=session)
-            run.update_state(session=session)
+            ready_tis = run.update_state(session=session)
             if run.state == State.RUNNING:
-                make_transient(run)
                 active_dag_runs.append(run)
-
-        for run in active_dag_runs:
-            self.log.debug("Examining active DAG run: %s", run)
-            tis = run.get_task_instances(state=SCHEDULEABLE_STATES)
-
-            # this loop is quite slow as it uses are_dependencies_met for
-            # every task (in ti.is_runnable). This is also called in
-            # update_state above which has already checked these tasks
-            for ti in tis:
-                task = dag.get_task(ti.task_id)
-
-                # fixme: ti.task is transient but needs to be set
-                ti.task = task
-
-                if ti.are_dependencies_met(
-                        dep_context=DepContext(flag_upstream_failed=True),
-                        session=session):
+                self.log.debug("Examining active DAG run: %s", run)
+                for ti in ready_tis:
                     self.log.debug('Queuing task: %s', ti)
                     task_instances_list.append(ti.key)
 
@@ -969,6 +958,9 @@ class SchedulerJob(BaseJob):
         dag_concurrency_map, task_concurrency_map = self.__get_concurrency_maps(
             states=STATES_TO_COUNT_AS_RUNNING, session=session)
 
+        num_tasks_in_executor = 0
+        num_starving_tasks_total = 0
+
         # Go through each pool, and queue up a task for execution if there are
         # any open slots in the pool.
         for pool, task_instances in pool_to_task_instances.items():
@@ -992,9 +984,7 @@ class SchedulerJob(BaseJob):
             priority_sorted_task_instances = sorted(
                 task_instances, key=lambda ti: (-ti.priority_weight, ti.execution_date))
 
-            # Number of tasks that cannot be scheduled because of no open slot in pool
             num_starving_tasks = 0
-            num_tasks_in_executor = 0
             for current_index, task_instance in enumerate(priority_sorted_task_instances):
                 if open_slots <= 0:
                     self.log.info(
@@ -1002,7 +992,9 @@ class SchedulerJob(BaseJob):
                         open_slots, pool
                     )
                     # Can't schedule any more since there are no more open slots.
-                    num_starving_tasks = len(priority_sorted_task_instances) - current_index
+                    num_unhandled = len(priority_sorted_task_instances) - current_index
+                    num_starving_tasks += num_unhandled
+                    num_starving_tasks_total += num_unhandled
                     break
 
                 # Check to make sure that the task concurrency of the DAG hasn't been
@@ -1045,8 +1037,17 @@ class SchedulerJob(BaseJob):
                     num_tasks_in_executor += 1
                     continue
 
+                if task_instance.pool_slots > open_slots:
+                    self.log.info("Not executing %s since it requires %s slots "
+                                  "but there are %s open slots in the pool %s.",
+                                  task_instance, task_instance.pool_slots, open_slots, pool)
+                    num_starving_tasks += 1
+                    num_starving_tasks_total += 1
+                    # Though we can execute tasks with lower priority if there's enough room
+                    continue
+
                 executable_tis.append(task_instance)
-                open_slots -= 1
+                open_slots -= task_instance.pool_slots
                 dag_concurrency_map[dag_id] += 1
                 task_concurrency_map[(task_instance.dag_id, task_instance.task_id)] += 1
 
@@ -1056,10 +1057,11 @@ class SchedulerJob(BaseJob):
                         pools[pool_name].open_slots())
             Stats.gauge('pool.used_slots.{pool_name}'.format(pool_name=pool_name),
                         pools[pool_name].occupied_slots())
-            Stats.gauge('scheduler.tasks.pending', len(task_instances_to_examine))
-            Stats.gauge('scheduler.tasks.running', num_tasks_in_executor)
-            Stats.gauge('scheduler.tasks.starving', num_starving_tasks)
-            Stats.gauge('scheduler.tasks.executable', len(executable_tis))
+
+        Stats.gauge('scheduler.tasks.pending', len(task_instances_to_examine))
+        Stats.gauge('scheduler.tasks.running', num_tasks_in_executor)
+        Stats.gauge('scheduler.tasks.starving', num_starving_tasks_total)
+        Stats.gauge('scheduler.tasks.executable', len(executable_tis))
 
         task_instance_str = "\n\t".join(
             [repr(x) for x in executable_tis])

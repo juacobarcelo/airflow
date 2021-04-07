@@ -127,7 +127,7 @@ otherwise Airflow will raise an exception.
 Templating with Jinja
 ---------------------
 Airflow leverages the power of
-`Jinja Templating <http://jinja.pocoo.org/docs/dev/>`_  and provides
+`Jinja Templating <https://jinja.palletsprojects.com/>`_  and provides
 the pipeline author
 with a set of built-in parameters and macros. Airflow also provides
 hooks for the pipeline author to define their own parameters, macros and
@@ -305,11 +305,6 @@ Note that the ``airflow test`` command runs task instances locally, outputs
 their log to stdout (on screen), doesn't bother with dependencies, and
 doesn't communicate state (running, success, failed, ...) to the database.
 It simply allows testing a single task instance.
-
-The same applies to ``airflow test [dag_id] [execution_date]``, but on a DAG level. It performs a single
-DAG run of the given DAG id. While it does take task dependencies into account, no state is registered in the
-database. It is convenient for locally testing a full run of your DAG, given that e.g. if one of your tasks
-expects data at some location, it is available.
 
 Backfill
 ''''''''

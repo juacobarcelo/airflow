@@ -19,9 +19,12 @@
 #
 import logging
 import socket
+import os
 from datetime import timedelta
 from typing import Any
 
+import flask
+import flask_login
 import six
 import pendulum
 from flask import Flask, session as flask_session
@@ -44,6 +47,7 @@ csrf = CSRFProtect()
 
 log = logging.getLogger(__name__)
 
+
 def create_app(config=None, session=None, testing=False, app_name="Airflow"):
     global app, appbuilder
     app = Flask(__name__)
@@ -57,10 +61,9 @@ def create_app(config=None, session=None, testing=False, app_name="Airflow"):
             x_port=conf.getint("webserver", "PROXY_FIX_X_PORT", fallback=1),
             x_prefix=conf.getint("webserver", "PROXY_FIX_X_PREFIX", fallback=1)
         )
-    app.secret_key = conf.get('webserver', 'SECRET_KEY')
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=settings.get_session_lifetime_config())
 
-    session_lifetime_days = conf.getint('webserver', 'SESSION_LIFETIME_DAYS', fallback=30)
-    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=session_lifetime_days)
+    app.secret_key = conf.get('webserver', 'SECRET_KEY')
 
     app.config.from_pyfile(settings.WEBSERVER_CONFIG, silent=True)
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -74,9 +77,14 @@ def create_app(config=None, session=None, testing=False, app_name="Airflow"):
     if config:
         app.config.from_mapping(config)
 
+    if 'SQLALCHEMY_ENGINE_OPTIONS' not in app.config:
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = settings.prepare_engine_args()
+
     csrf.init_app(app)
 
     db = SQLA(app)
+    from airflow.utils.sqlalchemy import setup_event_handlers
+    setup_event_handlers(db.session.get_bind())
 
     from airflow import api
     api.load_auth()
@@ -152,9 +160,9 @@ def create_app(config=None, session=None, testing=False, app_name="Airflow"):
                                 category="Admin")
 
             if "dev" in version.version:
-                airflow_doc_site = "https://airflow.readthedocs.io/en/latest"
+                airflow_doc_site = "https://s.apache.org/airflow-docs"
             else:
-                airflow_doc_site = 'https://airflow.apache.org/docs/{}'.format(version.version)
+                airflow_doc_site = 'https://airflow.apache.org/docs/apache-airflow/{}'.format(version.version)
 
             appbuilder.add_link("Documentation",
                                 href=airflow_doc_site,
@@ -261,15 +269,6 @@ def create_app(config=None, session=None, testing=False, app_name="Airflow"):
         @app.teardown_appcontext
         def shutdown_session(exception=None):
             settings.Session.remove()
-
-        @app.before_request
-        def before_request():
-            _force_log_out_after = conf.getint('webserver', 'FORCE_LOG_OUT_AFTER', fallback=0)
-            if _force_log_out_after > 0:
-                flask.session.permanent = True
-                app.permanent_session_lifetime = datetime.timedelta(minutes=_force_log_out_after)
-                flask.session.modified = True
-                flask.g.user = flask_login.current_user
 
         @app.after_request
         def apply_caching(response):

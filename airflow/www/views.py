@@ -32,9 +32,9 @@ import traceback
 from collections import defaultdict
 from datetime import timedelta
 from functools import wraps
+from operator import itemgetter
 from textwrap import dedent
 
-import markdown
 import sqlalchemy as sqla
 import pendulum
 from flask import (
@@ -55,7 +55,7 @@ from past.builtins import basestring
 from pygments import highlight, lexers
 import six
 from pygments.formatters.html import HtmlFormatter
-from six.moves.urllib.parse import quote, unquote
+from six.moves.urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse
 
 from sqlalchemy import or_, desc, and_, union_all
 from wtforms import (
@@ -87,6 +87,7 @@ from airflow.utils.timezone import datetime
 from airflow.www import utils as wwwutils
 from airflow.www.forms import (DateTimeForm, DateTimeWithNumRunsForm,
                                DateTimeWithNumRunsWithDagRunsForm)
+from airflow.www.utils import wrapped_markdown
 from airflow.www.validators import GreaterEqualThan
 
 QUERY_LIMIT = 100000
@@ -249,15 +250,6 @@ def render(obj, lexer):
     return out
 
 
-def wrapped_markdown(s, css_class=None):
-    if s is None:
-        return None
-
-    return Markup(
-        '<div class="rich_doc {css_class}" >' + markdown.markdown(s) + "</div>"
-    ).format(css_class=css_class)
-
-
 attr_renderer = {
     'bash_command': lambda x: render(x, lexers.BashLexer),
     'hql': lambda x: render(x, lexers.SqlLexer),
@@ -335,6 +327,39 @@ def get_chart_height(dag):
     charts, that is charts that take up space based on the size of the components within.
     """
     return 600 + len(dag.tasks) * 10
+
+
+def get_safe_url(url):
+    """Given a user-supplied URL, ensure it points to our web server"""
+    try:
+        valid_schemes = ['http', 'https', '']
+        valid_netlocs = [request.host, '']
+
+        if not url:
+            return "/admin/"
+
+        parsed = urlparse(url)
+
+        # If the url is relative & it contains semicolon, redirect it to homepage to avoid
+        # potential XSS. (Similar to https://github.com/python/cpython/pull/24297/files (bpo-42967))
+        if parsed.netloc == '' and parsed.scheme == '' and ';' in unquote(url):
+            return "/admin/"
+
+        query = parse_qsl(parsed.query, keep_blank_values=True)
+
+        # Remove all the query elements containing semicolon
+        # As part of https://github.com/python/cpython/pull/24297/files (bpo-42967)
+        # semicolon was already removed as a separator for query arguments by default
+        sanitized_query = [query_arg for query_arg in query if ';' not in query_arg[1]]
+        url = parsed._replace(query=urlencode(sanitized_query)).geturl()
+        if parsed.scheme in valid_schemes and parsed.netloc in valid_netlocs:
+            return url
+    except Exception as e:  # pylint: disable=broad-except
+        log.debug("Error validating value in origin parameter passed to URL: %s", url)
+        log.debug("Error: %s", e)
+        pass
+
+    return "/admin/"
 
 
 def get_date_time_num_runs_dag_runs_form_data(request, session, dag):
@@ -456,8 +481,9 @@ class Airflow(AirflowViewMixin, BaseView):
             df = hook.get_pandas_df(
                 wwwutils.limit_sql(sql, CHART_LIMIT, conn_type=db.conn_type))
             df = df.fillna(0)
-        except Exception as e:
-            payload['error'] += "SQL execution failed. Details: " + str(e)
+        except Exception:
+            log.exception("Chart SQL execution failed")
+            payload['error'] += "SQL execution failed. Contact your System Administrator for more details"
 
         if csv:
             return Response(
@@ -1117,7 +1143,7 @@ class Airflow(AirflowViewMixin, BaseView):
     def run(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
 
         dag = dagbag.get_dag(dag_id)
         task = dag.get_task(task_id)
@@ -1140,7 +1166,7 @@ class Airflow(AirflowViewMixin, BaseView):
             pass
 
         try:
-            from airflow.contrib.executors.kubernetes_executor import KubernetesExecutor
+            from airflow.executors.kubernetes_executor import KubernetesExecutor
             valid_kubernetes_config = isinstance(executor, KubernetesExecutor)
         except ImportError:
             pass
@@ -1188,7 +1214,7 @@ class Airflow(AirflowViewMixin, BaseView):
         from airflow.exceptions import DagNotFound, DagFileExists
 
         dag_id = request.values.get('dag_id')
-        origin = request.values.get('origin') or "/admin/"
+        origin = get_safe_url(request.values.get('origin'))
 
         try:
             delete_dag.delete_dag(dag_id)
@@ -1212,7 +1238,7 @@ class Airflow(AirflowViewMixin, BaseView):
     @provide_session
     def trigger(self, session=None):
         dag_id = request.values.get('dag_id')
-        origin = request.values.get('origin') or "/admin/"
+        origin = get_safe_url(request.values.get('origin'))
 
         if request.method == 'GET':
             return self.render(
@@ -1313,7 +1339,7 @@ class Airflow(AirflowViewMixin, BaseView):
     def clear(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         dag = dagbag.get_dag(dag_id)
 
         execution_date = request.form.get('execution_date')
@@ -1343,7 +1369,7 @@ class Airflow(AirflowViewMixin, BaseView):
     @wwwutils.notify_owner
     def dagrun_clear(self):
         dag_id = request.form.get('dag_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         execution_date = request.form.get('execution_date')
         confirmed = request.form.get('confirmed') == "true"
 
@@ -1446,7 +1472,7 @@ class Airflow(AirflowViewMixin, BaseView):
         dag_id = request.form.get('dag_id')
         execution_date = request.form.get('execution_date')
         confirmed = request.form.get('confirmed') == 'true'
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         return self._mark_dagrun_state_as_failed(dag_id, execution_date,
                                                  confirmed, origin)
 
@@ -1458,7 +1484,7 @@ class Airflow(AirflowViewMixin, BaseView):
         dag_id = request.form.get('dag_id')
         execution_date = request.form.get('execution_date')
         confirmed = request.form.get('confirmed') == 'true'
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         return self._mark_dagrun_state_as_success(dag_id, execution_date,
                                                   confirmed, origin)
 
@@ -1511,7 +1537,7 @@ class Airflow(AirflowViewMixin, BaseView):
     def failed(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         execution_date = request.form.get('execution_date')
 
         confirmed = request.form.get('confirmed') == "true"
@@ -1531,7 +1557,7 @@ class Airflow(AirflowViewMixin, BaseView):
     def success(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         execution_date = request.form.get('execution_date')
 
         confirmed = request.form.get('confirmed') == "true"
@@ -2383,8 +2409,9 @@ class QueryView(wwwutils.DataProfilingMixin, AirflowViewMixin, BaseView):
                     index=False,
                     na_rep='',
                 ) if has_data else ''
-            except Exception as e:
-                flash(str(e), 'error')
+            except Exception:
+                log.exception("Query SQL execution failed")
+                flash("SQL execution failed. Contact your System Administrator for more details", "error")
                 error = True
 
         if has_data and len(df) == QUERY_LIMIT:
@@ -3178,7 +3205,7 @@ class ConnectionModelView(wwwutils.SuperUserMixin, AirflowModelView):
         'extra__yandexcloud__folder_id': StringField('Default folder ID'),
     }
     form_choices = {
-        'conn_type': Connection._types
+        'conn_type': sorted(Connection._types, key=itemgetter(1))
     }
 
     def on_model_change(self, form, model, is_created):

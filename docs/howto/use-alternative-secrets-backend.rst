@@ -26,6 +26,11 @@ an alternative secrets backend to retrieve Airflow connections or Airflow variab
 such as :ref:`AWS SSM Parameter Store <ssm_parameter_store_secrets>`,
 :ref:`Hashicorp Vault Secrets<hashicorp_vault_secrets>` or you can :ref:`roll your own <roll_your_own_secrets_backend>`.
 
+.. note::
+
+    The Airflow UI only shows connections and variables stored in the Metadata DB and not via any other method.
+    If you use an alternative secrets backend, check inside your backend to view the values of your variables and connections.
+
 Search path
 ^^^^^^^^^^^
 When looking up a connection/variable, by default Airflow will search environment variables first and metastore
@@ -402,6 +407,41 @@ When ``gcp_key_path`` is not provided, it will use the Application Default Crede
 
 The value of the Secrets Manager secret id must be the :ref:`connection URI representation <generating_connection_uri>`
 of the connection object.
+
+Azure Key Vault Backend
+^^^^^^^^^^^^^^^^^^^^^^^
+
+To enable the Azure Key Vault as secrets backend, specify
+:py:class:`~airflow.contrib.secrets.azure_key_vault.AzureKeyVaultBackend`
+as the ``backend`` in  ``[secrets]`` section of ``airflow.cfg``.
+
+Here is a sample configuration:
+
+.. code-block:: ini
+
+    [secrets]
+    backend = airflow.contrib.secrets.azure_key_vault.AzureKeyVaultBackend
+    backend_kwargs = {"connections_prefix": "airflow-connections", "variables_prefix": "airflow-variables", "vault_url": "https://example-akv-resource-name.vault.azure.net/"}
+
+For client authentication, the ``DefaultAzureCredential`` from the Azure Python SDK is used as credential provider,
+which supports service principal, managed identity and user credentials.
+
+
+Storing and Retrieving Connections
+""""""""""""""""""""""""""""""""""
+
+If you have set ``connections_prefix`` as ``airflow-connections``, then for a connection id of ``smtp_default``,
+you would want to store your connection at ``airflow-connections-smtp-default``.
+
+The value of the secret must be the :ref:`connection URI representation <generating_connection_uri>`
+of the connection object.
+
+Storing and Retrieving Variables
+""""""""""""""""""""""""""""""""
+
+If you have set ``variables_prefix`` as ``airflow-variables``, then for an Variable key of ``hello``,
+you would want to store your Variable at ``airflow-variables-hello``.
+
 
 .. _roll_your_own_secrets_backend:
 

@@ -31,7 +31,7 @@ from datetime import timedelta
 from urllib.parse import unquote
 
 import six
-from six.moves.urllib.parse import quote
+from six.moves.urllib.parse import parse_qsl, quote, urlencode, urlparse
 
 import pendulum
 import sqlalchemy as sqla
@@ -87,6 +87,40 @@ if os.environ.get('SKIP_DAGS_PARSING') != 'True':
     dagbag = models.DagBag(settings.DAGS_FOLDER, store_serialized_dags=STORE_SERIALIZED_DAGS)
 else:
     dagbag = models.DagBag(os.devnull, include_examples=False)
+
+
+def get_safe_url(url):
+    """Given a user-supplied URL, ensure it points to our web server"""
+    try:
+        valid_schemes = ['http', 'https', '']
+        valid_netlocs = [request.host, '']
+
+        if not url:
+            return url_for('Airflow.index')
+
+        parsed = urlparse(url)
+
+        # If the url is relative & it contains semicolon, redirect it to homepage to avoid
+        # potential XSS. (Similar to https://github.com/python/cpython/pull/24297/files (bpo-42967))
+        if parsed.netloc == '' and parsed.scheme == '' and ';' in unquote(url):
+            return url_for('Airflow.index')
+
+        query = parse_qsl(parsed.query, keep_blank_values=True)
+
+        # Remove all the query elements containing semicolon
+        # As part of https://github.com/python/cpython/pull/24297/files (bpo-42967)
+        # semicolon was already removed as a separator for query arguments by default
+        sanitized_query = [query_arg for query_arg in query if ';' not in query_arg[1]]
+        url = parsed._replace(query=urlencode(sanitized_query)).geturl()
+
+        if parsed.scheme in valid_schemes and parsed.netloc in valid_netlocs:
+            return url
+    except Exception as e:  # pylint: disable=broad-except
+        logging.debug("Error validating value in origin parameter passed to URL: %s", url)
+        logging.debug("Error: %s", e)
+        pass
+
+    return url_for('Airflow.index')
 
 
 def get_date_time_num_runs_dag_runs_form_data(request, session, dag):
@@ -522,7 +556,9 @@ class Airflow(AirflowBaseView):
             return wwwutils.json_response({})
 
         query = session.query(
-            DagRun.dag_id, sqla.func.max(DagRun.execution_date).label('last_run')
+            DagRun.dag_id,
+            sqla.func.max(DagRun.execution_date).label('execution_date'),
+            sqla.func.max(DagRun.start_date).label('start_date'),
         ).group_by(DagRun.dag_id)
 
         # Filter to only ask for accessible and selected dags
@@ -531,7 +567,8 @@ class Airflow(AirflowBaseView):
         resp = {
             r.dag_id.replace('.', '__dot__'): {
                 'dag_id': r.dag_id,
-                'last_run': r.last_run.isoformat(),
+                'execution_date': r.execution_date.isoformat(),
+                'start_date': r.start_date.isoformat(),
             } for r in query
         }
         return wwwutils.json_response(resp)
@@ -930,7 +967,7 @@ class Airflow(AirflowBaseView):
     def run(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         dag = dagbag.get_dag(dag_id)
         task = dag.get_task(task_id)
 
@@ -952,7 +989,7 @@ class Airflow(AirflowBaseView):
             pass
 
         try:
-            from airflow.contrib.executors.kubernetes_executor import KubernetesExecutor
+            from airflow.executors.kubernetes_executor import KubernetesExecutor
             valid_kubernetes_config = isinstance(executor, KubernetesExecutor)
         except ImportError:
             pass
@@ -1000,7 +1037,7 @@ class Airflow(AirflowBaseView):
         from airflow.exceptions import DagNotFound, DagFileExists
 
         dag_id = request.values.get('dag_id')
-        origin = request.values.get('origin') or url_for('Airflow.index')
+        origin = get_safe_url(request.values.get('origin'))
 
         try:
             delete_dag.delete_dag(dag_id)
@@ -1027,7 +1064,7 @@ class Airflow(AirflowBaseView):
     def trigger(self, session=None):
 
         dag_id = request.values.get('dag_id')
-        origin = request.values.get('origin') or url_for('Airflow.index')
+        origin = get_safe_url(request.values.get('origin'))
 
         if request.method == 'GET':
             return self.render_template(
@@ -1128,7 +1165,7 @@ class Airflow(AirflowBaseView):
     def clear(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         dag = dagbag.get_dag(dag_id)
 
         execution_date = request.form.get('execution_date')
@@ -1158,7 +1195,7 @@ class Airflow(AirflowBaseView):
     @action_logging
     def dagrun_clear(self):
         dag_id = request.form.get('dag_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         execution_date = request.form.get('execution_date')
         confirmed = request.form.get('confirmed') == "true"
 
@@ -1280,7 +1317,7 @@ class Airflow(AirflowBaseView):
         dag_id = request.form.get('dag_id')
         execution_date = request.form.get('execution_date')
         confirmed = request.form.get('confirmed') == 'true'
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         return self._mark_dagrun_state_as_failed(dag_id, execution_date,
                                                  confirmed, origin)
 
@@ -1292,7 +1329,7 @@ class Airflow(AirflowBaseView):
         dag_id = request.form.get('dag_id')
         execution_date = request.form.get('execution_date')
         confirmed = request.form.get('confirmed') == 'true'
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         return self._mark_dagrun_state_as_success(dag_id, execution_date,
                                                   confirmed, origin)
 
@@ -1345,7 +1382,7 @@ class Airflow(AirflowBaseView):
     def failed(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         execution_date = request.form.get('execution_date')
 
         confirmed = request.form.get('confirmed') == "true"
@@ -1365,7 +1402,7 @@ class Airflow(AirflowBaseView):
     def success(self):
         dag_id = request.form.get('dag_id')
         task_id = request.form.get('task_id')
-        origin = request.form.get('origin')
+        origin = get_safe_url(request.form.get('origin'))
         execution_date = request.form.get('execution_date')
 
         confirmed = request.form.get('confirmed') == "true"
@@ -1980,42 +2017,38 @@ class Airflow(AirflowBaseView):
             .all()
         ) for ti in tis]))
 
-        # determine bars to show in the gantt chart
-        # all reschedules of one attempt are combinded into one bar
-        gantt_bar_items = []
-
         tasks = []
         for ti in tis:
-            end_date = ti.end_date or timezone.utcnow()
             # prev_attempted_tries will reflect the currently running try_number
             # or the try_number of the last complete run
             # https://issues.apache.org/jira/browse/AIRFLOW-2143
-            try_count = ti.prev_attempted_tries
-            gantt_bar_items.append((ti.task_id, ti.start_date, end_date, ti.state, try_count))
-            d = alchemy_to_dict(ti)
-            d['extraLinks'] = dag.get_task(ti.task_id).extra_links
-            tasks.append(d)
+            try_count = ti.prev_attempted_tries if ti.prev_attempted_tries != 0 else ti.try_number
+            task_dict = alchemy_to_dict(ti)
+            task_dict['end_date'] = task_dict['end_date'] or timezone.utcnow()
+            task_dict['extraLinks'] = dag.get_task(ti.task_id).extra_links
+            task_dict['try_number'] = try_count
+            tasks.append(task_dict)
 
         tf_count = 0
         try_count = 1
         prev_task_id = ""
-        for tf in ti_fails:
-            end_date = tf.end_date or timezone.utcnow()
-            start_date = tf.start_date or end_date
-            if tf_count != 0 and tf.task_id == prev_task_id:
-                try_count = try_count + 1
+        for failed_task_instance in ti_fails:
+            if tf_count != 0 and failed_task_instance.task_id == prev_task_id:
+                try_count += 1
             else:
                 try_count = 1
-            prev_task_id = tf.task_id
-            gantt_bar_items.append((tf.task_id, start_date, end_date, State.FAILED, try_count))
-            tf_count = tf_count + 1
-            task = dag.get_task(tf.task_id)
-            d = alchemy_to_dict(tf)
-            d['state'] = State.FAILED
-            d['operator'] = task.task_type
-            d['try_number'] = try_count
-            d['extraLinks'] = task.extra_links
-            tasks.append(d)
+            prev_task_id = failed_task_instance.task_id
+            tf_count += 1
+            task = dag.get_task(failed_task_instance.task_id)
+            task_dict = alchemy_to_dict(failed_task_instance)
+            end_date = task_dict['end_date'] or timezone.utcnow()
+            task_dict['end_date'] = end_date
+            task_dict['start_date'] = task_dict['start_date'] or end_date
+            task_dict['state'] = State.FAILED
+            task_dict['operator'] = task.task_type
+            task_dict['try_number'] = try_count
+            task_dict['extraLinks'] = task.extra_links
+            tasks.append(task_dict)
 
         data = {
             'taskNames': [ti.task_id for ti in tis],
@@ -2382,7 +2415,7 @@ class PoolModelView(AirflowModelView):
 
     validators_columns = {
         'pool': [validators.DataRequired()],
-        'slots': [validators.NumberRange(min=0)]
+        'slots': [validators.NumberRange(min=-1)]
     }
 
 

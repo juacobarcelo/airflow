@@ -17,40 +17,29 @@
 # under the License.
 
 # Docker command to build documentation
-function run_docs() {
-    verbose_docker run "${EXTRA_DOCKER_FLAGS[@]}" -t \
-            --entrypoint "/usr/local/bin/dumb-init"  \
-            --env PYTHONDONTWRITEBYTECODE \
-            --env VERBOSE \
-            --env VERBOSE_COMMANDS \
-            --env HOST_USER_ID="$(id -ur)" \
-            --env HOST_GROUP_ID="$(id -gr)" \
-            --env HOST_OS="$(uname -s)" \
-            --env HOST_HOME="${HOME}" \
-            --env HOST_AIRFLOW_SOURCES="${AIRFLOW_SOURCES}" \
-            --rm \
-            "${AIRFLOW_CI_IMAGE}" \
-            "--" "/opt/airflow/docs/build" \
-            | tee -a "${OUTPUT_LOG}"
+function runs::run_docs() {
+    docker run "${EXTRA_DOCKER_FLAGS[@]}" -t \
+        -e "GITHUB_ACTIONS=${GITHUB_ACTIONS="false"}" \
+        --entrypoint "/usr/local/bin/dumb-init"  \
+        "${AIRFLOW_CI_IMAGE}" \
+        "--" "/opt/airflow/scripts/in_container/run_docs_build.sh" "${@}"
 }
 
-# Docker command to generate constraint requirement files.
-function run_generate_requirements() {
+
+# Docker command to generate constraint files.
+function runs::run_generate_constraints() {
     docker run "${EXTRA_DOCKER_FLAGS[@]}" \
         --entrypoint "/usr/local/bin/dumb-init"  \
-        --env PYTHONDONTWRITEBYTECODE \
-        --env VERBOSE \
-        --env VERBOSE_COMMANDS \
-        --env HOST_USER_ID="$(id -ur)" \
-        --env HOST_GROUP_ID="$(id -gr)" \
-        --env HOST_OS="$(uname -s)" \
-        --env HOST_HOME="${HOME}" \
-        --env HOST_AIRFLOW_SOURCES="${AIRFLOW_SOURCES}" \
-        --env UPGRADE_WHILE_GENERATING_REQUIREMENTS \
-        --env PYTHON_MAJOR_MINOR_VERSION \
-        --env CHECK_REQUIREMENTS_ONLY \
-        --rm \
         "${AIRFLOW_CI_IMAGE}" \
-        "--" "/opt/airflow/scripts/ci/in_container/run_generate_requirements.sh" \
-        | tee -a "${OUTPUT_LOG}"
+        "--" "/opt/airflow/scripts/in_container/run_generate_constraints.sh"
+}
+
+# Docker command to prepare provider packages
+function runs::run_prepare_airflow_packages() {
+    docker run "${EXTRA_DOCKER_FLAGS[@]}" \
+        --entrypoint "/usr/local/bin/dumb-init"  \
+        -t \
+        -v "${AIRFLOW_SOURCES}:/opt/airflow" \
+        "${AIRFLOW_CI_IMAGE}" \
+        "--" "/opt/airflow/scripts/in_container/run_prepare_airflow_packages.sh" "${@}"
 }

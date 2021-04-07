@@ -512,7 +512,7 @@ class TaskInstance(Base, LoggingMixin):
         self.run_as_user = task.run_as_user
         self.max_tries = task.retries
         self.executor_config = task.executor_config
-        self.operator = task.__class__.__name__
+        self.operator = task.task_type
 
     @provide_session
     def clear_xcom_data(self, session=None):
@@ -964,8 +964,8 @@ class TaskInstance(Base, LoggingMixin):
 
                 self.render_templates(context=context)
                 if STORE_SERIALIZED_DAGS:
-                    RTIF.write(RTIF(ti=self, render_templates=False), session=session)
-                    RTIF.delete_old_records(self.task_id, self.dag_id, session=session)
+                    RTIF.write(RTIF(ti=self, render_templates=False))
+                    RTIF.delete_old_records(self.task_id, self.dag_id)
 
                 task_copy.pre_execute(context=context)
 
@@ -990,7 +990,7 @@ class TaskInstance(Base, LoggingMixin):
                 task_copy.post_execute(context=context, result=result)
 
                 end_time = time.time()
-                duration = end_time - start_time
+                duration = timedelta(seconds=end_time - start_time)
                 Stats.timing(
                     'dag.{dag_id}.{task_id}.duration'.format(
                         dag_id=task_copy.dag_id,
